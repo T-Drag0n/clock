@@ -1,46 +1,49 @@
 // SPDX-License-Identifier: MPL-2.0
 /*
- * twi.h -- two-wire serial interface master
+ * main.c -- sample code to interface with MPU-6050 over TWI
  * Copyright (C) 2025  Jacob Koziej <jacobkoziej@gmail.com>
  */
 
-#ifndef TWI_H
-#define TWI_H
-
-#include <stddef.h>
-#include <stddef.h>
+#include <avr/io.h>
+#include <avr/interrupt.h>
 #include <stdint.h>
-#include <util/twi.h>
+#include <stdlib.h>
 
-typedef enum twi_status {
-    TWI_STATUS_SUCCESS,
-    TWI_STATUS_ARBITRATION_LOST,
-    TWI_STATUS_BUSY,
-    TWI_STATUS_BUS_ERROR,
-    TWI_STATUS_CANCELLED,
-    TWI_STATUS_DISABLED,
-    TWI_STATUS_DOUBLE_INIT,
-    TWI_STATUS_FAILURE,
-    TWI_STATUS_INVALID_ADDRESS,
-    TWI_STATUS_INVALID_SCL,
-    TWI_STATUS_NACK,
-    TWI_STATUS_NO_INFO,
-    TWI_STATUS_WRITE_COLLISION,
-} twi_status_t;
+#include "twi.h"
+#include "rtc.h"
 
-typedef struct twi_message {
-    uint8_t  address;
-    uint8_t *buffer;
-    size_t   size;
-} twi_message_t;
+const uint32_t SCL_FREQUENCY = 100000;
 
-static const uint8_t TWI_READ = TW_READ;
-static const uint8_t TWI_WRITE = TW_WRITE;
+int main(void)
+{
+    sei();
 
-twi_status_t twi_cancel(void);
-twi_status_t twi_deinit(void);
-twi_status_t twi_enqueue(twi_message_t * const messages, size_t message_count);
-twi_status_t twi_init(const uint32_t scl_frequency);
-twi_status_t twi_status(void);
+    uint8_t pin_mask = (1 << PC5) | (1 << PC4);
 
-#endif  // TWI_H
+    DDRC  &= ~pin_mask;
+    PORTC |=  pin_mask;
+
+    twi_status_t status = twi_init(SCL_FREQUENCY);
+
+    if (status != TWI_STATUS_SUCCESS)
+        return EXIT_FAILURE;
+
+    twi_message_t messages[2]={
+        {
+            .address = (0x68<<1) | TWI_WRITE,
+            .buffer = (uint8_t[3]){0x01,binary_to_bcd(0x32), binary_to_bcd(0x10)},
+            .size = 3,
+        },
+        {
+            .address = (0x68<<1) | TWI_READ,
+            .buffer = (uint8_t[2]){},
+            .size = 2,
+        },
+    };
+
+    twi_enqueue(messages,2);
+
+    while(1);
+
+    return EXIT_SUCCESS;
+}

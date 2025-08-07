@@ -5,7 +5,7 @@
  */
 
 #include "twi.h"
-#include "private/twi.h"
+#include "private_twi.h"
 
 #include <avr/interrupt.h>
 #include <avr/io.h>
@@ -168,7 +168,7 @@ static bool scl_to_bitrate(
     // To avoid float-based division we perform a fixed-point
     // division by left shifting by 32. For this assumption to hold,
     // we must ensure that F_CPU stays below 1ULL << 32.
-    static_assert(
+    _Static_assert(
         F_CPU < (1ULL << 32),
         "F_CPU must be less than 1ULL << 32");
     const uint64_t f_cpu = F_CPU << 32;
@@ -265,7 +265,7 @@ ISR(TWI_vect)
                 break;
             }
 
-            [[fallthrough]];
+           // [[fallthrough]];
 
         case TW_MR_DATA_ACK:
             if (!size--) {
@@ -287,7 +287,7 @@ ISR(TWI_vect)
 
             *(buffer++) = TWDR;
 
-            [[fallthrough]];
+           // [[fallthrough]];
 
         case TW_MR_SLA_ACK:
             TWCR
