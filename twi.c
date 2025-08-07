@@ -1,41 +1,329 @@
+// SPDX-License-Identifier: MPL-2.0
+/*
+ * twi.c -- two-wire serial interface master
+ * Copyright (C) 2025  Jacob Koziej <jacobkoziej@gmail.com>
+ */
+
 #include "twi.h"
-#include <until.twi.h>
+#include "private/twi.h"
+
+#include <avr/interrupt.h>
 #include <avr/io.h>
+#include <limits.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <util/twi.h>
 
-const uint32_t SCL_FREQUENCY = 100000;
-bool INTERUPT_FLAG_CHECK = (TWCR&(1<<TWINT))==0 ? 1:0;
+static volatile twi_isr_t twi_isr;
 
-static bool calc_scl(uint32_t scl){
-    uint32_t const prescaler[4] = {1,4,16,64};
-    
-    for(int i = 0; i < 4; i++){
-        uint32_t const twbr = ((F_CPU/scl)-16) / (2 * prescaler[i]);
+twi_status_t twi_cancel(void)
+{
+    const uint8_t sreg = SREG;
 
-        if(twbr < 256){
-            TWSR = (TWSR & (~((1<<TWPS1) | (1<<TWPS0)))) | (i & 0x03);
+    cli();
 
-            return SUCCESS;
+    twi_isr = (twi_isr_t) {
+        .idle   = true,
+        .status = TWI_STATUS_CANCELLED,
+    };
+
+    uint8_t twcr = TWCR;
+
+    twcr &= 1 << TWSTA;
+    twcr |= 1 << TWSTO;
+
+    TWCR = twcr;
+
+    clear_twsto();
+
+    SREG = sreg;
+
+    return TWI_STATUS_SUCCESS;
+}
+
+twi_status_t twi_deinit(void)
+{
+    if (twi_status() == TWI_STATUS_BUSY)
+        return TWI_STATUS_BUSY;
+
+    TWCR = 1 << TWINT;
+
+    return TWI_STATUS_SUCCESS;
+}
+
+twi_status_t twi_enqueue(twi_message_t * const messages, size_t message_count)
+{
+    const uint8_t sreg = SREG;
+
+    cli();
+
+    const uint8_t twcr = TWCR;
+    const bool    idle = twi_isr.idle;
+
+    SREG = sreg;
+
+    if (!(twcr & (1 << TWEN)))
+        return TWI_STATUS_DISABLED;
+
+    if (!idle)
+        return TWI_STATUS_BUSY;
+
+    twi_isr = (twi_isr_t) {
+        .idle          = false,
+        .messages      = messages,
+        .message_count = message_count,
+    };
+
+
+    TWCR = twcr | (1 << TWSTA);
+
+    return TWI_STATUS_SUCCESS;
+}
+
+twi_status_t twi_init(const uint32_t scl_frequency)
+{
+    const uint8_t sreg = SREG;
+
+    cli();
+
+    const bool double_init = TWCR & (1 << TWEN);
+
+    SREG = sreg;
+
+    if (double_init)
+        return TWI_STATUS_DOUBLE_INIT;
+
+    uint8_t twbr;
+    uint8_t twps;
+
+    if (!scl_to_bitrate(scl_frequency, &twbr, &twps))
+        return TWI_STATUS_INVALID_SCL;
+
+    TWBR = twbr;
+    TWSR = twps;
+
+    TWAR = ~(1 << TWGCE);
+    TWAMR = 0xFF;
+
+    TWCR
+        = (1 << TWINT)
+        | (0 << TWEA)
+        | (0 << TWSTA)
+        | (0 << TWSTO)
+        | (1 << TWEN)
+        | (1 << TWIE);
+
+    twi_isr = (twi_isr_t) {
+        .idle = true,
+        .status = TWI_STATUS_SUCCESS,
+    };
+
+    return TWI_STATUS_SUCCESS;
+}
+
+twi_status_t twi_status(void)
+{
+    const uint8_t sreg = SREG;
+
+    cli();
+
+    const twi_status_t status
+        = twi_isr.idle
+        ? twi_isr.status
+        : TWI_STATUS_BUSY;
+
+    SREG = sreg;
+
+    return status;
+}
+
+static void clear_twsto(void)
+{
+    // If a user enqueues a new set of messages while the STOP
+    // condition is asserted on the bus, triggering a START
+    // condition will result in a bus error. To avoid this, we wait
+    // for TWSTO to be automatically get cleared by hardware. This
+    // does however introduce an unavoidable delay of ~15 us in our
+    // code (when running at 16 MHz) which is irritating, however,
+    // it's a tradeoff worth making if it means users of our driver
+    // don't need to deal with spurious bus errors.
+    while (TWCR & (1 << TWSTO))
+        continue;
+}
+
+static void return_isr(const twi_status_t status)
+{
+    twi_isr = (twi_isr_t) {
+        .idle   = true,
+        .status = status,
+    };
+}
+
+static bool scl_to_bitrate(
+    const uint32_t f_scl,
+    uint8_t * const twbr,
+    uint8_t * const twps)
+{
+    // To avoid float-based division we perform a fixed-point
+    // division by left shifting by 32. For this assumption to hold,
+    // we must ensure that F_CPU stays below 1ULL << 32.
+    static_assert(
+        F_CPU < (1ULL << 32),
+        "F_CPU must be less than 1ULL << 32");
+    const uint64_t f_cpu = F_CPU << 32;
+
+    // We have that F_SCL = F_CPU / (16 + (2 * TWBR * prescale)).
+    // To solve for TWBR and the prescale value iteratively, we
+    // rearrange this equality to the expression below.
+    const uint64_t target = ((f_cpu / f_scl) - (16ULL << 32)) / 2;
+
+    const bool f_cpu_sufficient = target >> 32;
+    if (!f_cpu_sufficient) return false;
+
+    for (*twps = 0; *twps < 4; (*twps)++) {
+        const uint8_t prescaler = 1 << (*twps * 2);
+
+        const uint64_t result = target / prescaler;
+        const uint32_t potential_twbr
+            = (result >> 32) + ((bool) (result & (1ULL << 31)));
+
+        // We've exhausted our prescaler.
+        if (!potential_twbr)
+            break;
+
+        if (potential_twbr <= UINT8_MAX) {
+            *twbr = potential_twbr;
+            return true;
         }
     }
 
-    return FAILURE;
+    return false;
 }
 
-void twi_init(){
-        TWCR = (1<<TWINT) | (1<<TWEN) | (1<<TWIE);
-        while(INTERUPT_FLAG_CHECK);
-}
+ISR(TWI_vect)
+{
+    static unsigned char *buffer;
+    static size_t         size;
 
-void twi_write(uint16_t *data){
-    TWDR = data;
-    TWCR = (1<<TWINT) | (1<<TWEN);
-    while(INTERUPT_FLAG_CHECK)
-}
+    twi_status_t status = TWI_STATUS_FAILURE;
 
-void twi_read_ack(){
+    if (TWCR & (1 << TWWC)) {
+        status = TWI_STATUS_WRITE_COLLISION;
+        goto error;
+    }
 
-}
+    twi_message_t * const message = twi_isr.messages;
 
-void twi_read_nack(){
-    
+    switch (TW_STATUS) {
+        case TW_START:
+        case TW_REP_START:
+            TWDR = message->address;
+
+            buffer = message->buffer;
+            size   = message->size;
+
+            uint8_t twcr = TWCR & ~(1 << TWSTA);
+
+            const bool mr_mode = message->address & 1;
+
+            if (mr_mode)
+                twcr |= 1 << TWEA;
+
+            TWCR = twcr;
+
+            return;
+
+        case TW_MT_SLA_ACK:
+        case TW_MT_DATA_ACK:
+            if (!size--) {
+                const uint8_t bit
+                    = --twi_isr.message_count
+                    ? ++twi_isr.messages, TWSTA
+                    : TWSTO;
+
+                if (bit == TWSTO)
+                    return_isr(TWI_STATUS_SUCCESS);
+
+                TWCR |= 1 << bit;
+
+                if (bit == TWSTO)
+                    clear_twsto();
+
+                return;
+            }
+
+            TWDR  = *(buffer++);
+            TWCR |= 1 << TWINT;
+
+            return;
+
+        case TW_MR_DATA_NACK:
+            if (size-- != TWI_MR_FINAL_BYTE) {
+                status = TWI_STATUS_NACK;
+
+                break;
+            }
+
+            [[fallthrough]];
+
+        case TW_MR_DATA_ACK:
+            if (!size--) {
+                const uint8_t bit
+                    = --twi_isr.message_count
+                    ? ++twi_isr.messages, TWSTA
+                    : TWSTO;
+
+                if (bit == TWSTO)
+                    return_isr(TWI_STATUS_SUCCESS);
+
+                TWCR |= 1 << bit;
+
+                if (bit == TWSTO)
+                    clear_twsto();
+
+                return;
+            }
+
+            *(buffer++) = TWDR;
+
+            [[fallthrough]];
+
+        case TW_MR_SLA_ACK:
+            TWCR
+                = size == TWI_MR_FINAL_BYTE
+                ? TWCR & ~(1 << TWEA)
+                : TWCR;
+
+            return;
+
+        case TW_MR_SLA_NACK:
+        case TW_MT_DATA_NACK:
+        case TW_MT_SLA_NACK:
+            status = TWI_STATUS_NACK;
+            break;
+
+        //   TW_MT_ARB_LOST:
+        case TW_MR_ARB_LOST:
+            status = TWI_STATUS_ARBITRATION_LOST;
+            break;
+
+        case TW_NO_INFO:
+            status = TWI_STATUS_NO_INFO;
+            break;
+
+        case TW_BUS_ERROR:
+            status = TWI_STATUS_BUS_ERROR;
+            break;
+
+        default:
+            break;
+    }
+
+error:
+    return_isr(status);
+
+    TWCR |= 1 << TWSTO;
+
+    clear_twsto();
 }
