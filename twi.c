@@ -1,6 +1,9 @@
 #include "twi.h"
+#include <until.twi.h>
+#include <avr/io.h>
 
 const uint32_t SCL_FREQUENCY = 100000;
+bool INTERUPT_FLAG_CHECK = (TWCR&(1<<TWINT))==0 ? 1:0;
 
 static bool calc_scl(uint32_t scl){
     uint32_t const prescaler[4] = {1,4,16,64};
@@ -18,46 +21,21 @@ static bool calc_scl(uint32_t scl){
     return FAILURE;
 }
 
-static bool bcd_to_binary(uint8_t bcd_value){
-    ;
-}
-
-twi_status_t twi_init(const uint32_t scl_frequency){
-    if(!calc_scl(scl_frequency)){
-        return FAILURE;
-    }else{
-
+void twi_init(){
         TWCR = (1<<TWINT) | (1<<TWEN) | (1<<TWIE);
-
-        return SUCCESS;
-    }
+        while(INTERUPT_FLAG_CHECK);
 }
 
-twi_status_t twi_enqueue(twi_message_t * const messages, size_t message_count)
-{
-    const uint8_t sreg = SREG;
+void twi_write(uint16_t *data){
+    TWDR = data;
+    TWCR = (1<<TWINT) | (1<<TWEN);
+    while(INTERUPT_FLAG_CHECK)
+}
 
-    cli();
+void twi_read_ack(){
 
-    const uint8_t twcr = TWCR;
-    const bool    idle = twi_isr.idle;
+}
 
-    SREG = sreg;
-
-    if (!(twcr & (1 << TWEN)))
-        return TWI_STATUS_DISABLED;
-
-    if (!idle)
-        return TWI_STATUS_BUSY;
-
-    twi_isr = (twi_isr_t) {
-        .idle          = false,
-        .messages      = messages,
-        .message_count = message_count,
-    };
-
-
-    TWCR = twcr | (1 << TWSTA);
-
-    return TWI_STATUS_SUCCESS;
+void twi_read_nack(){
+    
 }
