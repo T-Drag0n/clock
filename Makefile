@@ -16,7 +16,7 @@ all: maine.elf
 clean:	
 	@rm -rvf *.d *.elf *.o
 
-maine.elf: maine.o
+maine.elf: maine.o twi.o rtc.o encoder.o
 	$(CC) $(CFLAGS) -o $@ $^
 
 %.o: %.c

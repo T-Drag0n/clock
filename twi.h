@@ -8,7 +8,7 @@
 #define TWI_H
 
 #include <stddef.h>
-#include <stddef.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <util/twi.h>
 
