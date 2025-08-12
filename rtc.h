@@ -5,6 +5,7 @@
 #define CLOCK_ADDRESS 0x00
 #define ALARM_ADDRESS 0x0B
 #define STATUS_ADDRESS 0x0F
+#define CONTROL_ADDRESS 0x0E
 
 typedef struct time_value{
     uint8_t minute;
@@ -17,3 +18,4 @@ void read_current_time(time_value_t *time);
 void read_alarm_time(time_value_t *time);
 void write_current_time(time_value_t *time);
 void write_alarm_time(time_value_t *time);
+void clear_alarm_flag(time_value_t *time);

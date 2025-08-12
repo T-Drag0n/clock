@@ -54,9 +54,8 @@ int main(void)
     while(1){
 
         if(alarm_triggered){
-            //wait for the return of function here
-            //clear_alarm_flag();
-            while(1);
+            //ISR might always be active. If program freeze then move the clear to the ISR and make if statement
+            clear_alarm_flag(&time);
             alarm_triggered = false;
         }
 
@@ -87,6 +86,7 @@ int main(void)
 
         }else{
             read_current_time(&time);
+            //read_alarm_time(&time); only for debugging purposes
             //display 
         }
 
