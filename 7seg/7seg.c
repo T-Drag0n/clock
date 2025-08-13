@@ -1,8 +1,10 @@
 #include "7seg.h"
+#include "time.h"
 #include <avr/io.h>
 #include <util/delay.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <avr/interrupt.h>
 
 #define DIGITNUMBER 8
 #define DIGITS 10
@@ -80,11 +82,24 @@ void disp_init(void){
     SPCR = (1 << SPE) | (1 << MSTR) | (1 << SPR0);
     SPCR &= ~(1 << SPIE);
     SPCR &= ~(1 << DORD);
+    timer0_init();
+    sei();
 }
 
 void display(char MESSAGE[], uint8_t decimal){
-    for (int digit=0; digit<DIGITNUMBER; digit++){
-            show(MESSAGE[digit], digit, (decimal&(1<<(7-digit))));
-            _delay_ms(1);
+    static uint32_t first_time = 0;
+    static uint8_t digit = 0;
+    uint32_t second_time=millis();
+
+    if (second_time-first_time >= 1){
+        show(MESSAGE[digit], digit, (decimal&(1<<(7-digit))));
+        digit = (digit + 1) % DIGITNUMBER;
+        first_time = second_time;
     }
+    
+    // for (int digit=0; digit<DIGITNUMBER; digit++){
+    //         show(MESSAGE[digit], digit, (decimal&(1<<(7-digit))));
+    //         _delay_ms(1);
+    // }
+
 }

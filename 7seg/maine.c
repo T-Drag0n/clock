@@ -1,0 +1,77 @@
+// SPDX-License-Identifier: MPL-2.0
+/*
+ * main.c -- sample code to interface with MPU-6050 over TWI
+ * Copyright (C) 2025  Jacob Koziej <jacobkoziej@gmail.com>
+ */
+
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <stdbool.h>
+
+#include "twi.h"
+#include "rtc.h"
+#include "encoder.h"
+
+const uint32_t SCL_FREQUENCY = 100000;
+volatile bool alarm_triggered = false;
+
+typedef enum{
+    CLOCK,
+    SET_TIME,
+    SET_ALARM,
+    ALARM_ON,
+}mode_t;
+
+ISR(INT0_vect) {
+    alarm_triggered = true;
+}
+
+int main(void)
+{
+    sei();
+
+    while(1){
+
+        if(alarm_triggered){
+            //ISR might always be active. If program freeze then move the clear to the ISR and make if statement
+            clear_alarm_flag(&time);
+            alarm_triggered = false;
+        }
+
+        encoder(&encoder_mode);
+        mode = (mode_t)encoder_mode.value;
+
+        if (mode != CLOCK) {
+            encoder(&encoder_mins);
+            encoder(&encoder_hours);
+            encoder(&encoder_confirm);
+
+            if (encoder_confirm.value) {
+
+                time.minute = encoder_mins.value;
+                time.hour = encoder_hours.value;
+
+                if (mode == SET_TIME){
+                    write_current_time(&time);
+                    mode = CLOCK;
+                }else if (mode == SET_ALARM){
+                    write_alarm_time(&time);
+                    mode = CLOCK;
+               }
+                
+               encoder_confirm.value = 0;
+               encoder_mode.value = 0;
+            }
+
+        }else{
+            read_current_time(&time);
+            //read_alarm_time(&time); only for debugging purposes
+            //display 
+        }
+
+    }
+
+    return EXIT_SUCCESS;
+}

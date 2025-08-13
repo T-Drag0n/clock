@@ -16,7 +16,7 @@ all: main.elf
 clean:
 	@rm -rvf *.d *.elf *.o
 
-main.elf: main.o 7seg.o
+main.elf: main.o 7seg.o time.o encoder.o digital.o rtc.o twi.o
 	$(CC) $(CFLAGS) -o $@ $^
 
 %.o: %.c
